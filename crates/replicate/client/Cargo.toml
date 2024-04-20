@@ -1,0 +1,35 @@
+[package]
+name = "replicate-client"
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "A client api for state replication"
+
+[dependencies]
+base64.workspace = true
+bytes.workspace = true
+eyre.workspace = true
+futures.workspace = true
+pin-project.workspace = true
+replicate-common.path = "../common"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio-serde = { workspace = true, features = ["json"] }
+tokio-util = { workspace = true, features = ["codec"] }
+tracing.workspace = true
+url.workspace = true
+wtransport = { workspace = true, features = ["dangerous-configuration"] }
+
+[dependencies.tokio]
+workspace = true
+default-features = false
+features = ["sync"]
+
+[dev-dependencies]
+color-eyre.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+clap.workspace = true
