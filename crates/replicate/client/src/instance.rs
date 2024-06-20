@@ -31,12 +31,6 @@
 //! disconnects and reconnects. The client must prove ownership of this unique
 //! identifier.
 //!
-//! The most logical implementation strategy to accomplish this is to solve it the same
-//! way that the nexus protocol does - every user is identified by a
-//! [Decentralized Identifier][DID][^1], and they sign a message with the DID's associated
-//! private key, proving that they are who they say they are. This is done via the
-//! [`AuthenticationAttestation`] argument when connecting to the instance.
-//!
 //! # Entities
 //! Each entity has state, and the instance has many entities. An entity is identified
 //! with an id, which the server assigns in response to a request to spawn an entity
@@ -79,18 +73,14 @@
 //! [did:web]: https://w3c-ccg.github.io/did-method-web/
 //! [ABA]: https://en.wikipedia.org/wiki/ABA_problem
 
-use base64::prelude::{Engine, BASE64_URL_SAFE_NO_PAD};
 use eyre::{bail, ensure, Result, WrapErr};
 use futures::{SinkExt, StreamExt};
-use replicate_common::{
-    data_model::{DataModel, Entity, LocalChanges, RemoteChanges, State},
-    did::AuthenticationAttestation,
+use replicate_common::data_model::{
+	DataModel, Entity, LocalChanges, RemoteChanges, State,
 };
-use tracing::warn;
 use url::Url;
-use wtransport::{endpoint::ConnectOptions, ClientConfig, Endpoint};
 
-use crate::CertHashDecodeErr;
+use crate::{connect_to_url, Ascii};
 
 use replicate_common::messages::instance::{Clientbound as Cb, Serverbound as Sb};
 type RpcFramed = replicate_common::Framed<wtransport::stream::BiStream, Cb, Sb>;
@@ -99,135 +89,101 @@ type RpcFramed = replicate_common::Framed<wtransport::stream::BiStream, Cb, Sb>;
 /// Instances manage persistent, realtime state updates for many concurrent clients.
 #[derive(Debug)]
 pub struct Instance {
-    _conn: wtransport::Connection,
-    _url: Url,
-    /// Used to reliably push state updates from server to client. This happens for all
-    /// entities when the client initially connects, as well as when the server is
-    /// marking an entity as "stable", meaning its state is no longer changing frame to
-    /// frame. This allows the server to reduce network bandwidth.
-    // _stable_states: RecvStream,
-    /// Used for general RPC.
-    _rpc: RpcFramed,
-    /// Current sequence number.
-    // TODO: Figure out how sequence numbers work
-    _state_seq: StateSeq,
-    dm: DataModel,
+	_conn: wtransport::Connection,
+	_url: Url,
+	/// Used to reliably push state updates from server to client. This happens for all
+	/// entities when the client initially connects, as well as when the server is
+	/// marking an entity as "stable", meaning its state is no longer changing frame to
+	/// frame. This allows the server to reduce network bandwidth.
+	// _stable_states: RecvStream,
+	/// Used for general RPC.
+	_rpc: RpcFramed,
+	/// Current sequence number.
+	// TODO: Figure out how sequence numbers work
+	_state_seq: StateSeq,
+	dm: DataModel,
 }
 
 impl Instance {
-    /// # Arguments
-    /// - `url`: Url of the manager api. For example, `https://foobar.com/my/manager`
-    ///   or `192.168.1.1:1337/uwu/some_manager`.
-    /// - `auth_attest`: Used to provide to the server proof of our identity, based on
-    ///   our DID.
-    pub async fn connect(url: Url, auth_attest: AuthenticationAttestation) -> Result<Self> {
-        let conn = connect_to_url(&url, auth_attest)
-            .await
-            .wrap_err("failed to connect to server")?;
+	/// # Arguments
+	/// - `url`: Url of the manager api. For example, `https://foobar.com/my/manager`
+	///   or `192.168.1.1:1337/uwu/some_manager`.
+	/// - `bearer_token`: optional, must be ascii otherwise we will panic.
+	pub async fn connect(url: Url, bearer_token: Option<&str>) -> Result<Self> {
+		let bearer_token = bearer_token.map(|s| {
+			// Technically, bearer tokens only permit a *subset* of ascii. But I
+			// didn't care enough to be that precise.
+			Ascii::try_from(s).expect("to be in-spec, bearer tokens must be ascii")
+		});
+		let conn = connect_to_url(&url, bearer_token)
+			.await
+			.wrap_err("failed to connect to server")?;
 
-        let bi = wtransport::stream::BiStream::join(
-            conn.open_bi()
-                .await
-                .wrap_err("could not initiate bi stream")?
-                .await
-                .wrap_err("could not finish opening bi stream")?,
-        );
-        let mut rpc = RpcFramed::new(bi);
+		let bi = wtransport::stream::BiStream::join(
+			conn.open_bi()
+				.await
+				.wrap_err("could not initiate bi stream")?
+				.await
+				.wrap_err("could not finish opening bi stream")?,
+		);
+		let mut rpc = RpcFramed::new(bi);
 
-        // Do handshake before anything else
-        {
-            rpc.send(Sb::HandshakeRequest)
-                .await
-                .wrap_err("failed to send handshake request")?;
-            let Some(msg) = rpc.next().await else {
-                bail!("Server disconnected before completing handshake");
-            };
-            let msg = msg.wrap_err("error while receiving handshake response")?;
-            ensure!(
-                msg == Cb::HandshakeResponse,
-                "invalid message during handshake"
-            );
-        }
+		// Do handshake before anything else
+		{
+			rpc.send(Sb::HandshakeRequest)
+				.await
+				.wrap_err("failed to send handshake request")?;
+			let Some(msg) = rpc.next().await else {
+				bail!("Server disconnected before completing handshake");
+			};
+			let msg = msg.wrap_err("error while receiving handshake response")?;
+			ensure!(
+				msg == Cb::HandshakeResponse,
+				"invalid message during handshake"
+			);
+		}
 
-        Ok(Self {
-            _conn: conn,
-            _url: url,
-            _state_seq: Default::default(),
-            dm: DataModel::new(),
-            _rpc: rpc,
-        })
-    }
+		Ok(Self {
+			_conn: conn,
+			_url: url,
+			_state_seq: Default::default(),
+			dm: DataModel::new(),
+			_rpc: rpc,
+		})
+	}
 
-    /// Accesses the data model read-only.
-    pub fn data_model(&self) -> &DataModel {
-        &self.dm
-    }
+	/// Accesses the data model read-only.
+	pub fn data_model(&self) -> &DataModel {
+		&self.dm
+	}
 
-    /// Accesses the data model read-write.
-    pub fn data_model_mut(&mut self) -> &mut DataModel {
-        &mut self.dm
-    }
+	/// Accesses the data model read-write.
+	pub fn data_model_mut(&mut self) -> &mut DataModel {
+		&mut self.dm
+	}
 
-    // This retrieves the [`RemoteChanges`] from the networking task, calls [`DataModel::flush`]` to apply the changes, and gives the [`LocalChanges`] to the networking task so that it can asynchronously update the server.
-    pub fn flush_pending_changes(&mut self) {
-        // TODO: Actually get these from a networking task.
-        let remote_changes = RemoteChanges::default();
-        let mut local_changes = LocalChanges::default();
+	// This retrieves the [`RemoteChanges`] from the networking task, calls [`DataModel::flush`]` to apply the changes, and gives the [`LocalChanges`] to the networking task so that it can asynchronously update the server.
+	pub fn flush_pending_changes(&mut self) {
+		// TODO: Actually get these from a networking task.
+		let remote_changes = RemoteChanges::default();
+		let mut local_changes = LocalChanges::default();
 
-        self.dm.flush(&remote_changes, &mut local_changes);
+		self.dm.flush(&remote_changes, &mut local_changes);
 
-        // TODO: Actually send the local changes to the networking task.
-    }
+		// TODO: Actually send the local changes to the networking task.
+	}
 }
 
 /// The results of a state update pushed by the server.
 // TODO: This is gonna go away now.
 pub enum RecvState<'a> {
-    DeletedEntities(&'a [Entity]),
-    StateUpdates {
-        entities: &'a [Entity],
-        states: &'a [State],
-    },
+	DeletedEntities(&'a [Entity]),
+	StateUpdates {
+		entities: &'a [Entity],
+		states: &'a [State],
+	},
 }
 
 /// Sequence number for state messages
 #[derive(Debug, Default)]
 pub struct StateSeq;
-
-async fn connect_to_url(
-    url: &Url,
-    auth_attest: AuthenticationAttestation,
-) -> Result<wtransport::Connection> {
-    let cert_hash = if let Some(frag) = url.fragment() {
-        let cert_hash = BASE64_URL_SAFE_NO_PAD
-            .decode(frag)
-            .map_err(CertHashDecodeErr::from)?;
-        let len = cert_hash.len();
-        let cert_hash: [u8; 32] = cert_hash
-            .try_into()
-            .map_err(|_| CertHashDecodeErr::InvalidLen(len))?;
-        Some(cert_hash)
-    } else {
-        None
-    };
-
-    let cfg = ClientConfig::builder().with_bind_default();
-    let cfg = if let Some(_cert_hash) = cert_hash {
-        // TODO: Implement self signed certs properly:
-        // https://github.com/BiagioFesta/wtransport/issues/128
-        warn!(
-            "`serverCertificateHashes` is not yet supported, turning off \
-                cert validation."
-        );
-        cfg.with_no_cert_validation()
-    } else {
-        cfg.with_native_certs()
-    }
-    .build();
-
-    let client = Endpoint::client(cfg)?;
-    let opts = ConnectOptions::builder(url)
-        .add_header("Authorization", format!("Bearer {}", auth_attest))
-        .build();
-    Ok(client.connect(opts).await?)
-}
