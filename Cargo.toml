@@ -35,7 +35,7 @@ tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
 url = "2.5.0"
 uuid = "1.7.0"
-wtransport = "=0.1.11"
+wtransport = "0.1.13"
 
 [profile.dev]
 # Enable a small amount of optimization in debug mode
