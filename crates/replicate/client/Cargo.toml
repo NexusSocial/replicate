@@ -8,6 +8,7 @@ rust-version.workspace = true
 description = "A client api for state replication"
 
 [dependencies]
+uuid.workspace = true
 base64.workspace = true
 bytes.workspace = true
 eyre.workspace = true

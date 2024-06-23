@@ -11,6 +11,7 @@ description = "Shared code between replicate-client and replicate-server"
 bytes.workspace = true
 futures.workspace = true
 pin-project.workspace = true
+rand.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, default-features = false }
